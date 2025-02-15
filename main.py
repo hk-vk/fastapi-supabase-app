@@ -4,12 +4,12 @@ from supabase import create_client, Client
 from app.schemas import AnalysisRequestCreate, AnalysisRequestResponse, FeedbackCreate
 from app.routers import feedback
 from app.services.news_analysis import NewsAnalysisService
+from app.services.writing_style import malayalam_analyzer as writing_style_analyzer
 from typing import Optional, Dict, Any
 from datetime import datetime
 import os
 from dotenv import load_dotenv
 import logging
-
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -95,6 +95,19 @@ async def reverse_search(query: Dict[str, Any], background_tasks: BackgroundTask
         return result
     except Exception as e:
         logger.error(f"Error in reverse search: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/writing-style")
+async def analyze_writing_style(query: Dict[str, str]):
+    try:
+        content = query.get("content", "")
+        if not content:
+            raise HTTPException(status_code=400, detail="Content is required")
+        
+        result = writing_style_analyzer.analyze_text(content)
+        return result
+    except Exception as e:
+        logger.error(f"Error in writing style analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
