@@ -1,7 +1,7 @@
 from exa_py import Exa
 import google.generativeai as genai
-from datetime import datetime
-from typing import Dict, Any
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
 import os
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
@@ -13,33 +13,78 @@ import aiohttp
 from fastapi import BackgroundTasks
 import hashlib
 import json
-from cachetools import TTLCache, cached
+from cachetools import TTLCache
+import sqlite3
+import pickle
+from pathlib import Path
 
 load_dotenv()
+
+class CacheDB:
+    def __init__(self, db_path: str = "analysis_cache.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_cache (
+                    query_hash TEXT PRIMARY KEY,
+                    result BLOB,
+                    timestamp TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON analysis_cache(timestamp)")
+
+    def get(self, query_hash: str) -> Optional[Dict]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                result = conn.execute(
+                    "SELECT result FROM analysis_cache WHERE query_hash = ? AND timestamp > datetime('now', '-1 day')",
+                    (query_hash,)
+                ).fetchone()
+                if result:
+                    return pickle.loads(result[0])
+        except Exception as e:
+            print(f"Cache get error: {e}")
+            return None
+        return None
+
+    def set(self, query_hash: str, result: Dict):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO analysis_cache (query_hash, result, timestamp) VALUES (?, ?, datetime('now'))",
+                    (query_hash, pickle.dumps(result))
+                )
+        except Exception as e:
+            print(f"Cache set error: {e}")
+
+    def cleanup(self):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM analysis_cache WHERE timestamp < datetime('now', '-1 day')")
+        except Exception as e:
+            print(f"Cache cleanup error: {e}")
 
 class NewsAnalysisService:
     def __init__(self):
         self.exa = Exa(api_key=os.getenv("EXA_API_KEY"))
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         self.model = genai.GenerativeModel('gemini-1.5-flash')
-        self.translator = GoogleTranslator(source='ml', target='en')
-        self.cache = TTLCache(maxsize=100, ttl=3600)  # Cache results for 1 hour
-        self.executor = ThreadPoolExecutor(max_workers=3)  # Limit concurrent API calls
-        
-    @cached(cache=TTLCache(maxsize=1000, ttl=3600))
-    def _get_cached_analysis(self, query_hash: str) -> Dict[str, Any]:
-        """Cache analysis results using original query hash as key"""
-        return self.cache.get(query_hash)
-
-    def _cache_result(self, query_hash: str, result: Dict[str, Any]):
-        """Store result in cache using original query hash"""
-        self.cache[query_hash] = result
+        self.translator = GoogleTranslator(source='auto', target='en')
+        self.memory_cache = TTLCache(maxsize=100, ttl=80000000)  # 1 hour memory cache
+        self.disk_cache = CacheDB()
+        self.executor = ThreadPoolExecutor(max_workers=3)
 
     @lru_cache(maxsize=128)
     def _translate_text(self, text: str) -> str:
-        """Translate text from Malayalam to English"""
+        """Translate text to English with language auto-detection"""
         try:
-            return self.translator.translate(text)
+            source_lang = detect(text)
+            if source_lang != 'en':
+                return self.translator.translate(text)
+            return text
         except Exception:
             return text
 
@@ -50,7 +95,7 @@ class NewsAnalysisService:
             lambda: self.exa.search_and_contents(
                 query,
                 text=True,
-                num_results=7,
+                num_results=7,  # Reduced for faster results
                 type="auto",
                 livecrawl="always",
                 use_autoprompt=True
@@ -58,10 +103,13 @@ class NewsAnalysisService:
         )
 
     async def _get_gemini_analysis(self, prompt: str):
-        """Async method to get Gemini analysis"""
+        """Async method to get Gemini analysis with lower temperature"""
         return await asyncio.get_event_loop().run_in_executor(
             self.executor,
-            lambda: self.model.generate_content(prompt)
+            lambda: self.model.generate_content(
+                prompt,
+                generation_config={'temperature': 0.3}  
+            )
         )
 
     def _clean_json_response(self, text: str) -> Dict[str, Any]:
@@ -69,57 +117,57 @@ class NewsAnalysisService:
         try:
             # Remove newlines, extra spaces, and backticks
             text = text.replace('\n', '').replace('`', '').strip()
-            
-            # Try to parse and re-stringify to ensure valid JSON
             json_obj = json.loads(text)
-            cleaned_text = json.dumps(json_obj, separators=(',', ':'), ensure_ascii=False)
-            return json.loads(cleaned_text)
+            return json_obj
         except json.JSONDecodeError:
-            # If JSON parsing fails, return as a basic dict
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 0.5,
-                "EXPLANATION": "Failed to parse response: " + text.replace('\n', ' ').replace('`', '').replace('\\', '')
+                "EXPLANATION": "Failed to parse response: " + text[:200].replace('\n', ' ')
             }
 
     async def analyze_news(self, query: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-        # Generate cache key from original Malayalam query
-        original_query_hash = hashlib.md5(query.encode()).hexdigest()
+        # Generate cache key
+        query_hash = hashlib.md5(query.encode()).hexdigest()
         
-        # Check cache first using original query hash
-        cached_result = self._get_cached_analysis(original_query_hash)
-        if (cached_result):
-            return cached_result
+        # Check memory cache first
+        if result := self.memory_cache.get(query_hash):
+            return result
+            
+        # Check disk cache
+        if result := self.disk_cache.get(query_hash):
+            # Store in memory cache for faster subsequent access
+            self.memory_cache[query_hash] = result
+            return result
 
-        # Translate for analysis
+        # Translate if needed
         translated_query = self._translate_text(query)
-        current_date = datetime.now().strftime('%Y-%m-%d')
         
-        # Fetch results asynchronously with translated query
+        # Fetch results asynchronously
         results = await self._fetch_exa_results(translated_query)
-        
         content_docs = "\n\n".join([result.text for result in results.results])
+        
+        # Get analysis with current date
+        current_date = datetime.now().strftime('%Y-%m-%d')
         system_prompt = self._get_system_prompt(current_date)
         full_prompt = f"{system_prompt}\n\nDOCUMENTS TO ANALYZE:\n{content_docs}\n\nCLAIM TO VERIFY: {translated_query}"
         
-        # Get analysis asynchronously
         response = await self._get_gemini_analysis(full_prompt)
-        result = response.text
+        result = self._clean_json_response(response.text)
         
-        # Clean and format the response
-        result = self._clean_json_response(result)
-        
-        # Cache the result with original Malayalam query hash
-        self._cache_result(original_query_hash, result)
+        # Cache the result in both memory and disk
+        self.memory_cache[query_hash] = result
+        self.disk_cache.set(query_hash, result)
         
         # Schedule cache cleanup in background
-        background_tasks.add_task(self._cleanup_old_cache)
+        background_tasks.add_task(self._cleanup_caches)
         
         return result
 
-    def _cleanup_old_cache(self):
-        """Clean up expired cache entries"""
-        self.cache.expire()
+    def _cleanup_caches(self):
+        """Clean up both memory and disk caches"""
+        self.memory_cache.expire()
+        self.disk_cache.cleanup()
 
     @lru_cache(maxsize=1)
     def _get_system_prompt(self, current_date: str) -> str:
@@ -129,7 +177,7 @@ class NewsAnalysisService:
 You are an advanced AI assistant specialized in detecting fake news. Return result in compact JSON format without any newlines or extra spaces. Analysis timestamp: {current_date}.
 
 VERIFICATION MATRIX:
-always detect the tense of the sentences before any analysis
+always detect the tense of the sentences before any analysis. and read each and every word and compare it with the results
 1. TEMPORAL ANALYSIS:
    | Claim Type | Verification Required |
    |------------|---------------------|
