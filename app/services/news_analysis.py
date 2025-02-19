@@ -17,6 +17,13 @@ from cachetools import TTLCache
 import sqlite3
 import pickle
 from pathlib import Path
+import logging
+from fastapi import HTTPException
+from app.core.http_client import get_http_session
+from dateutil import parser
+import pytz
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -67,15 +74,52 @@ class CacheDB:
         except Exception as e:
             print(f"Cache cleanup error: {e}")
 
+    def clear_db(self):
+        """Clear the entire analysis cache database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM analysis_cache")
+                conn.commit()
+        except Exception as e:
+            print(f"Cache clear error: {e}")
+
 class NewsAnalysisService:
     def __init__(self):
-        self.exa = Exa(api_key=os.getenv("EXA_API_KEY"))
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
-        self.translator = GoogleTranslator(source='auto', target='en')
-        self.memory_cache = TTLCache(maxsize=100, ttl=80000000)  # 1 hour memory cache
+        self._session = None
+        self._translate_session = None
+        # Initialize caches
+        self.memory_cache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
         self.disk_cache = CacheDB()
         self.executor = ThreadPoolExecutor(max_workers=3)
+        
+        # Initialize API clients
+        exa_api_key = os.getenv("EXA_API_KEY")
+        if not exa_api_key:
+            raise ValueError("EXA_API_KEY not found in environment variables")
+        self.exa = Exa(exa_api_key)
+        
+        # Initialize Gemini
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Initialize translator
+        self.translator = GoogleTranslator(source='auto', target='en')
+
+    async def get_session(self):
+        """Get or create the HTTP session"""
+        if not self._session:
+            self._session = await get_http_session()
+        return self._session
+
+    async def get_translate_session(self):
+        """Get or create the translation HTTP session"""
+        if not self._translate_session:
+            self._translate_session = await get_http_session()
+        return self._translate_session
+
+    async def cleanup(self):
+        """No cleanup needed as session is managed by http_client"""
+        pass
 
     @lru_cache(maxsize=128)
     def _translate_text(self, text: str) -> str:
@@ -95,7 +139,7 @@ class NewsAnalysisService:
             lambda: self.exa.search_and_contents(
                 query,
                 text=True,
-                num_results=7,  # Reduced for faster results
+                num_results=10,  # Reduced for faster results
                 type="auto",
                 livecrawl="always",
                 use_autoprompt=True
@@ -103,32 +147,71 @@ class NewsAnalysisService:
         )
 
     async def _get_gemini_analysis(self, prompt: str):
-        """Async method to get Gemini analysis with lower temperature"""
+        """Async method to get Gemini analysis with minimal temperature for maximum accuracy"""
         return await asyncio.get_event_loop().run_in_executor(
             self.executor,
             lambda: self.model.generate_content(
                 prompt,
-                generation_config={'temperature': 0.3}  
+                generation_config={
+                    'temperature': 0.1,  # Reduced temperature for more deterministic output
+                    'top_p': 0.1,        # Lower top_p for more focused sampling
+                    'top_k': 1           # Minimal top_k for most likely outputs only
+                }
             )
         )
 
     def _clean_json_response(self, text: str) -> Dict[str, Any]:
-        """Clean and format the JSON response"""
+        """Clean and format the JSON response with enhanced validation"""
         try:
-            # Remove newlines, extra spaces, and backticks
-            text = text.replace('\n', '').replace('`', '').strip()
-            json_obj = json.loads(text)
+            # Remove common formatting issues
+            text = text.strip()
+            text = text.replace('\n', '').replace('`', '').replace('json', '')
+            text = text.replace('```', '').replace('json', '')
+            
+            # Find the first { and last } to extract valid JSON
+            start = text.find('{')
+            end = text.rfind('}')
+            if start == -1 or end == -1:
+                raise json.JSONDecodeError("No JSON object found", text, 0)
+            
+            json_str = text[start:end + 1]
+            json_obj = json.loads(json_str)
+
+            # Validate required fields and types
+            if not isinstance(json_obj.get("ISFAKE"), (int, float)) or \
+               not isinstance(json_obj.get("CONFIDENCE"), (int, float)) or \
+               not isinstance(json_obj.get("EXPLANATION"), str):
+                raise ValueError("Invalid field types")
+
+            # Normalize values
+            json_obj["ISFAKE"] = 1 if json_obj["ISFAKE"] not in [0, 1] else json_obj["ISFAKE"]
+            json_obj["CONFIDENCE"] = max(0.0, min(1.0, float(json_obj["CONFIDENCE"])))
+            
+            # Ensure explanation is not empty
+            if not json_obj["EXPLANATION"].strip():
+                json_obj["EXPLANATION"] = "വിശകലനം പൂർത്തിയായി, പക്ഷേ വിശദീകരണം ലഭ്യമല്ല."
+
             return json_obj
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
+            logger.error(f"JSON cleaning error: {str(e)}", exc_info=True)
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 0.5,
-                "EXPLANATION": "Failed to parse response: " + text[:200].replace('\n', ' ')
+                "EXPLANATION": "പ്രതികരണം വിശകലനം ചെയ്യുന്നതിൽ പിശക്. ദയവായി വീണ്ടും ശ്രമിക്കുക."
             }
 
     async def analyze_news(self, query: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-        # Generate cache key
-        query_hash = hashlib.md5(query.encode()).hexdigest()
+        # Input validation and sanitization
+        if not query or len(query.strip()) < 5:
+            return {
+                "ISFAKE": 1,
+                "CONFIDENCE": 1.0,
+                "EXPLANATION": "വിശകലനത്തിനായി കുറഞ്ഞത് 5 അക്ഷരങ്ങളെങ്കിലും ആവശ്യമാണ്."
+            }
+
+        # Generate cache key with version for prompt updates
+        prompt_version = "v2"  # Increment when prompt changes
+        query_hash = hashlib.md5(f"{query}{prompt_version}".encode()).hexdigest()
         
         # Check memory cache first
         if result := self.memory_cache.get(query_hash):
@@ -140,29 +223,114 @@ class NewsAnalysisService:
             self.memory_cache[query_hash] = result
             return result
 
-        # Translate if needed
-        translated_query = self._translate_text(query)
-        
-        # Fetch results asynchronously
-        results = await self._fetch_exa_results(translated_query)
-        content_docs = "\n\n".join([result.text for result in results.results])
-        
-        # Get analysis with current date
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        system_prompt = self._get_system_prompt(current_date)
-        full_prompt = f"{system_prompt}\n\nDOCUMENTS TO ANALYZE:\n{content_docs}\n\nCLAIM TO VERIFY: {translated_query}"
-        
-        response = await self._get_gemini_analysis(full_prompt)
-        result = self._clean_json_response(response.text)
-        
-        # Cache the result in both memory and disk
-        self.memory_cache[query_hash] = result
-        self.disk_cache.set(query_hash, result)
-        
-        # Schedule cache cleanup in background
-        background_tasks.add_task(self._cleanup_caches)
-        
-        return result
+        try:
+            # Translate if needed with error handling
+            translated_query = self._translate_text(query)
+            if not translated_query:
+                raise ValueError("Translation failed")
+
+            # Fetch results with timeout and retry
+            try:
+                results = await asyncio.wait_for(
+                    self._fetch_exa_results(translated_query),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "ISFAKE": 1,
+                    "CONFIDENCE": 1.0,
+                    "EXPLANATION": "സിസ്റ്റം താത്കാലികമായി ലഭ്യമല്ല. ദയവായി പിന്നീട് ശ്രമിക്കുക."
+                }
+
+            # Validate and process search results
+            if not results or not results.results:
+                return {
+                    "ISFAKE": 1,
+                    "CONFIDENCE": 0.9,
+                    "EXPLANATION": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
+                }
+
+            # Enhanced content processing
+            content_docs = []
+            total_sources = len(results.results)
+            recent_sources = 0
+            credible_sources = 0
+
+            for result in results.results:
+                if result.text:
+                    content_docs.append(f"SOURCE: {result.url}\nCONTENT: {result.text}")
+                    
+                    # Count recent sources (within last 7 days)
+                    if result.published_date:
+                        try:
+                            published_date = parser.parse(result.published_date)
+                            if (datetime.now() - published_date).days <= 7:
+                                recent_sources += 1
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse date: {result.published_date}", exc_info=True)
+                    
+                    # Basic credibility check based on domain
+                    if any(domain in result.url for domain in ['.gov', '.edu', '.org', 'news.', 'times.']):
+                        credible_sources += 1
+
+            # Prepare analysis context
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            system_prompt = self._get_system_prompt(current_date)
+            
+            analysis_context = f"""
+            CLAIM METADATA:
+            - Total Sources Found: {total_sources}
+            - Recent Sources (≤7d): {recent_sources}
+            - Credible Sources: {credible_sources}
+            - Analysis Date: {current_date}
+            
+            DOCUMENTS TO ANALYZE:
+            {chr(10).join(content_docs)}
+            
+            CLAIM TO VERIFY: {translated_query}
+            """
+
+            # Get analysis with enhanced error handling
+            try:
+                response = await asyncio.wait_for(
+                    self._get_gemini_analysis(f"{system_prompt}\n\n{analysis_context}"),
+                    timeout=45.0
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "ISFAKE": 1,
+                    "CONFIDENCE": 1.0,
+                    "EXPLANATION": "വിശകലന സമയം കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+                }
+
+            # Process and validate response
+            result = self._clean_json_response(response.text)
+            
+            # Validate result structure
+            if not all(k in result for k in ["ISFAKE", "CONFIDENCE", "EXPLANATION"]):
+                result = {
+                    "ISFAKE": 1,
+                    "CONFIDENCE": 1.0,
+                    "EXPLANATION": "സിസ്റ്റം പിശക്: അപൂർണ്ണമായ വിശകലനം. ദയവായി പിന്നീട് ശ്രമിക്കുക."
+                }
+            
+            # Cache valid results
+            if result.get("EXPLANATION") != "സിസ്റ്റം പിശക്: അപൂർണ്ണമായ വിശകലനം. ദയവായി പിന്നീട് ശ്രമിക്കുക.":
+                self.memory_cache[query_hash] = result
+                self.disk_cache.set(query_hash, result)
+            
+            # Schedule cache cleanup in background
+            background_tasks.add_task(self._cleanup_caches)
+            
+            return result
+
+        except Exception as e:
+            logger.error(f"Analysis error: {str(e)}", exc_info=True)
+            return {
+                "ISFAKE": 1,
+                "CONFIDENCE": 1.0,
+                "EXPLANATION": "സിസ്റ്റം പിശക്: വിശകലനം പൂർത്തിയാക്കാൻ കഴിഞ്ഞില്ല. ദയവായി പിന്നീട് ശ്രമിക്കുക."
+            }
 
     def _cleanup_caches(self):
         """Clean up both memory and disk caches"""
@@ -174,59 +342,118 @@ class NewsAnalysisService:
         """Cache the system prompt as it rarely changes"""
         return f"""[ANALYSIS DATE: {current_date}]
 
-You are an advanced AI assistant specialized in detecting fake news. Return result in compact JSON format without any newlines or extra spaces. Analysis timestamp: {current_date}.
+You are a highly precise AI fact-checker tasked with detecting misinformation. Your analysis must be extremely thorough and conservative - when in doubt, mark as unverified. Return result in strict JSON format. Analyze each claim atomically, breaking down compound statements.
 
-VERIFICATION MATRIX:
-always detect the tense of the sentences before any analysis. and read each and every word and compare it with the results
-1. TEMPORAL ANALYSIS:
-   | Claim Type | Verification Required |
-   |------------|---------------------|
-   | Past Events| Multiple sources + dates |
-   | Present Claims | Live sources + official statements |
-   | Future Predictions | Official announcements only |
-   | Undated Claims | Source credibility check |
+CORE PRINCIPLES:
+1. Default to Uncertainty: If insufficient evidence exists, mark as potentially false
+2. Zero Speculation: Never make assumptions about unstated facts
+3. Temporal Precision: Always verify exact dates and sequences
+4. Source Hierarchy: Weight information based on authority and recency
+5. Context Preservation: Consider full context before making determinations
+6. Cross-Validation: Require multiple independent sources for verification
 
-2. SOURCE CREDIBILITY SCORING:
-   - Official Government Sources: 0.9-1.0
-   - Mainstream Media: 0.7-0.9
-   - Local News Outlets: 0.5-0.7
-   - Social Media: 0.1-0.4
-   - Anonymous Sources: 0.0-0.1
+VERIFICATION PROTOCOL:
 
-3. CRITICAL VERIFICATION RULES:
-   A. Future Claims:
-      - Require multiple confirmations
-      - Must have specific dates/timelines
-      - Need institutional backing
+1. CLAIM DECOMPOSITION:
+   - Break down compound claims into atomic facts
+   - Identify temporal markers and dependencies
+   - Map entity relationships and hierarchies
+   - Extract quantifiable metrics and dates
+   - Isolate conditional statements and qualifiers
 
-   B. Date-Specific Claims:
-      - Cross-reference with official calendars
-      - Verify against government announcements
-      - Check historical patterns
+2. TEMPORAL ANALYSIS (Mandatory):
+   | Time Frame | Required Evidence |
+   |------------|------------------|
+   | Historical | Primary sources + Multiple secondary validations |
+   | Recent Past| Official records + Multiple media confirmations |
+   | Present    | Live sources + Official statements + Independent verification |
+   | Future     | Official announcements + Supporting documentation |
+   | Undated    | Full context reconstruction + Multiple source validation |
 
-   C. Event Verification:
-      - Match with official calendars
-      - Verify regional variations
-      - Check historical patterns
+3. SOURCE CREDIBILITY MATRIX:
+   | Source Type | Weight | Required Validation |
+   |-------------|--------|-------------------|
+   | Official Government | 0.95 | Cross-reference with related agencies |
+   | International Bodies | 0.90 | Verify against member state data |
+   | Primary Documents | 0.85 | Authentication check + Context verification |
+   | Academic Journals | 0.80 | Peer review status + Citation analysis |
+   | Major News Agencies | 0.75 | Multiple source confirmation |
+   | Regional Media | 0.60 | Local authority verification |
+   | Expert Statements | 0.50 | Credential verification + Conflict check |
+   | Social Media | 0.20 | Extensive corroboration required |
+   | Anonymous | 0.10 | Multiple independent verifications |
 
-4. LINGUISTIC ANALYSIS:
-   - Check for temporal markers
-   - Identify predictive language patterns
-   - Analyze certainty indicators
-   - Detect emotional manipulation
+4. VALIDATION REQUIREMENTS:
+   A. For Any Positive Verification:
+      - Minimum 3 independent sources
+      - At least 1 primary source
+      - No contradicting evidence
+      - Clear temporal alignment
+      - Proper contextual fit
 
-5. EVIDENCE WEIGHTING:
-   | Evidence Type | Weight |
-   |--------------|--------|
-   | Official Documents | 1.0 |
-   | Media Reports | 0.8 |
-   | Expert Statements | 0.7 |
-   | Public Records | 0.6 |
-   | Social Media | 0.3 |
+   B. Automatic False Flags:
+      - Single source claims
+      - Contradictory evidence
+      - Temporal inconsistencies
+      - Missing crucial context
+      - Unverified entities
+      - Logical impossibilities
 
-Output Format: Return a compact JSON object without newlines or extra whitespace in this exact format:
-{{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION":"Brief explanation"}}
+5. EVIDENCE QUALITY METRICS:
+   - Recency (≤24h: 1.0, ≤7d: 0.8, ≤30d: 0.6, >30d: 0.4)
+   - Directness (Primary: 1.0, Secondary: 0.7, Tertiary: 0.4)
+   - Corroboration (Multiple: 1.0, Single: 0.5, None: 0.0)
+   - Authority (Official: 1.0, Expert: 0.8, Public: 0.4)
+   - Completeness (Full: 1.0, Partial: 0.6, Limited: 0.3)
 
-ISFAKE: [0 or 1]
-CONFIDENCE: [score between 0-1]
-EXPLANATION: [Structured analysis in just 200 words or less in professional way]"""
+6. CONTEXTUAL ANALYSIS:
+   - Historical precedent check
+   - Cultural context verification
+   - Geographic relevance
+   - Domain-specific validation
+   - Stakeholder analysis
+   - Impact assessment
+
+7. ERROR PREVENTION:
+   - Double-check all dates and numbers
+   - Verify entity names and titles
+   - Confirm geographic details
+   - Validate cause-effect relationships
+   - Check for logical consistency
+   - Assess probability of claims
+
+Output Format (Strict JSON, no newlines/spaces):
+{{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION":"വിശദമായ വിശകലനം"}}
+
+RESPONSE RULES:
+1. ISFAKE: [0: Verified True, 1: False/Unverified]
+   - Default to 1 if any doubt exists
+   - Require 100% certainty for 0
+
+2. CONFIDENCE: [0.0-1.0]
+   - Must reflect evidence quality
+   - Consider source credibility
+   - Account for verification depth
+   - Never exceed source limitations
+
+3. EXPLANATION:
+   - Malayalam language only
+   - Maximum 200 words
+   - Include evidence summary
+   - State verification method
+   - List key sources
+   - Note any uncertainties
+   - Professional tone
+
+MANDATORY CHECKS:
+✓ Temporal consistency
+✓ Source credibility
+✓ Logical coherence
+✓ Context alignment
+✓ Evidence quality
+✓ Entity verification
+✓ Claim atomicity
+✓ Impact assessment
+
+If ANY mandatory check fails, mark as ISFAKE:1"""
+

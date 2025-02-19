@@ -104,10 +104,16 @@ async def analyze_writing_style(query: Dict[str, str]):
         if not content:
             raise HTTPException(status_code=400, detail="Content is required")
         
+        logger.debug(f"Analyzing text of length: {len(content)}")
         result = writing_style_analyzer.analyze_text(content)
+        
+        logger.debug(f"Analysis results: {result}")
+        if all(score == 0 for score in result.values()):
+            logger.warning("All scores returned as zero - possible analysis failure")
+            
         return result
     except Exception as e:
-        logger.error(f"Error in writing style analysis: {str(e)}")
+        logger.error(f"Error in writing style analysis: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
