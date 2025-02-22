@@ -1,6 +1,6 @@
 from exa_py import Exa
 import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 import os
 from dotenv import load_dotenv
@@ -132,19 +132,41 @@ class NewsAnalysisService:
         except Exception:
             return text
 
-    async def _fetch_exa_results(self, query: str):
-        """Async method to fetch Exa search results"""
-        return await asyncio.get_event_loop().run_in_executor(
-            self.executor,
-            lambda: self.exa.search_and_contents(
-                query,
-                text=True,
-                num_results=10,  # Reduced for faster results
-                type="auto",
-                livecrawl="always",
-                use_autoprompt=True
+    async def _fetch_english_results(self, query: str):
+        """Async method to fetch Exa search results for English content"""
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                lambda: self.exa.search_and_contents(
+                    query,
+                    text=True,
+                    num_results=8,
+                    type="auto",
+                    use_autoprompt=True,
+                    livecrawl="always",
+                )
             )
-        )
+        except Exception as e:
+            logger.error(f"English search error: {str(e)}")
+            return None
+
+    async def _fetch_malayalam_results(self, query: str):
+        """Async method to fetch Exa search results for Malayalam content"""
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                lambda: self.exa.search_and_contents(
+                    query,
+                    text=True,
+                    num_results=7,
+                    type="keyword",
+                    use_autoprompt=True,
+                    livecrawl="always",
+                )
+            )
+        except Exception as e:
+            logger.error(f"Malayalam search error: {str(e)}")
+            return None
 
     async def _get_gemini_analysis(self, prompt: str):
         """Async method to get Gemini analysis with minimal temperature for maximum accuracy"""
@@ -201,7 +223,6 @@ class NewsAnalysisService:
             }
 
     async def analyze_news(self, query: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-        # Input validation and sanitization
         if not query or len(query.strip()) < 5:
             return {
                 "ISFAKE": 1,
@@ -210,7 +231,7 @@ class NewsAnalysisService:
             }
 
         # Generate cache key with version for prompt updates
-        prompt_version = "v2"  # Increment when prompt changes
+        prompt_version = "v2"
         query_hash = hashlib.md5(f"{query}{prompt_version}".encode()).hexdigest()
         
         # Check memory cache first
@@ -224,54 +245,84 @@ class NewsAnalysisService:
             return result
 
         try:
-            # Translate if needed with error handling
             translated_query = self._translate_text(query)
             if not translated_query:
                 raise ValueError("Translation failed")
 
-            # Fetch results with timeout and retry
             try:
-                results = await asyncio.wait_for(
-                    self._fetch_exa_results(translated_query),
-                    timeout=30.0
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "ISFAKE": 1,
-                    "CONFIDENCE": 1.0,
-                    "EXPLANATION": "സിസ്റ്റം താത്കാലികമായി ലഭ്യമല്ല. ദയവായി പിന്നീട് ശ്രമിക്കുക."
-                }
+                # Fetch results from both English and Malayalam sources concurrently
+                english_task = self._fetch_english_results(translated_query)
+                malayalam_task = self._fetch_malayalam_results(query)
+                results = await asyncio.gather(english_task, malayalam_task, return_exceptions=True)
+                
+                # Process and combine results
+                combined_results = []
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.warning(f"Search failed: {str(result)}")
+                        continue
+                    if result and hasattr(result, 'results'):
+                        combined_results.extend(result.results)
+                
+                # Remove duplicates and create Results object
+                seen_urls = set()
+                unique_results = []
+                for result in combined_results:
+                    if result.url not in seen_urls:
+                        seen_urls.add(result.url)
+                        unique_results.append(result)
+                
+                class Results:
+                    def __init__(self, results_list):
+                        self.results = results_list
+                    def __len__(self):
+                        return len(self.results)
 
-            # Validate and process search results
-            if not results or not results.results:
+                results = Results(unique_results[:10])
+                
+                if not results or len(results) == 0:
+                    error_response = {
+                        "ISFAKE": 1,
+                        "CONFIDENCE": 0.9,
+                        "EXPLANATION": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
+                    }
+                    return error_response
+
+            except asyncio.TimeoutError:
+                logger.error("Search timeout")
                 return {
                     "ISFAKE": 1,
-                    "CONFIDENCE": 0.9,
-                    "EXPLANATION": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
+                    "CONFIDENCE": 0.8,
+                    "EXPLANATION": "തിരയൽ സമയപരിധി കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
                 }
 
             # Enhanced content processing
             content_docs = []
-            total_sources = len(results.results)
+            total_sources = len(results) if results else 0
             recent_sources = 0
             credible_sources = 0
 
-            for result in results.results:
-                if result.text:
-                    content_docs.append(f"SOURCE: {result.url}\nCONTENT: {result.text}")
-                    
-                    # Count recent sources (within last 7 days)
-                    if result.published_date:
-                        try:
-                            published_date = parser.parse(result.published_date)
-                            if (datetime.now() - published_date).days <= 7:
-                                recent_sources += 1
-                        except (ValueError, TypeError) as e:
-                            logger.warning(f"Failed to parse date: {result.published_date}", exc_info=True)
-                    
-                    # Basic credibility check based on domain
-                    if any(domain in result.url for domain in ['.gov', '.edu', '.org', 'news.', 'times.']):
-                        credible_sources += 1
+            if total_sources > 0:
+                for result in results.results:
+                    if result.text:
+                        content_docs.append(f"SOURCE: {result.url}\nCONTENT: {result.text}")
+                        
+                        # Count recent sources (within last 7 days)
+                        if result.published_date:
+                            try:
+                                published_date = parser.parse(result.published_date)
+                                # Convert naive datetime to timezone-aware
+                                if published_date.tzinfo is None:
+                                    published_date = published_date.replace(tzinfo=timezone.utc)
+                                current_time = datetime.now(timezone.utc)
+                                if (current_time - published_date).days <= 7:
+                                    recent_sources += 1
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"Failed to parse date: {result.published_date}", exc_info=True)
+                        
+                        # Basic credibility check based on domain
+                        if any(domain in result.url for domain in ['.gov', '.edu', '.org', 'news.', 'times.']):
+                            credible_sources += 1
 
             # Prepare analysis context
             current_date = datetime.now().strftime('%Y-%m-%d')
