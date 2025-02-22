@@ -86,11 +86,15 @@ class CacheDB:
 class NewsAnalysisService:
     def __init__(self):
         self._session = None
-        self._translate_session = None
         # Initialize caches
         self.memory_cache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
         self.disk_cache = CacheDB()
-        self.executor = ThreadPoolExecutor(max_workers=3)
+        
+        # Initialize thread pool with optimal size for connection handling
+        self.executor = ThreadPoolExecutor(
+            max_workers=min(32, (os.cpu_count() or 1) + 4),
+            thread_name_prefix="analyzer"
+        )
         
         # Initialize API clients
         exa_api_key = os.getenv("EXA_API_KEY")
@@ -102,24 +106,27 @@ class NewsAnalysisService:
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         self.model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # Initialize translator
+        # Initialize translator with persistent connection
         self.translator = GoogleTranslator(source='auto', target='en')
 
     async def get_session(self):
-        """Get or create the HTTP session"""
+        """Get the shared HTTP session"""
         if not self._session:
             self._session = await get_http_session()
         return self._session
 
-    async def get_translate_session(self):
-        """Get or create the translation HTTP session"""
-        if not self._translate_session:
-            self._translate_session = await get_http_session()
-        return self._translate_session
-
     async def cleanup(self):
-        """No cleanup needed as session is managed by http_client"""
-        pass
+        """Cleanup resources properly"""
+        try:
+            # Shutdown thread pool gracefully
+            self.executor.shutdown(wait=True)
+            
+            # Clear caches
+            self.memory_cache.clear()
+            self.disk_cache.clear_db()
+            
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
 
     @lru_cache(maxsize=128)
     def _translate_text(self, text: str) -> str:
@@ -133,15 +140,21 @@ class NewsAnalysisService:
             return text
 
     async def _fetch_english_results(self, query: str):
-        """Async method to fetch Exa search results for English content"""
+        """Optimized async method to fetch Exa search results for English content"""
         try:
-            return await asyncio.get_event_loop().run_in_executor(
+            session = await self.get_session()
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
                 self.executor,
                 lambda: self.exa.search_and_contents(
                     query,
-                    text=True,
+                     text = {
+
+                    "max_characters": 1000
+
+                 },
                     num_results=8,
-                    type="auto",
+                    type="keyword",
                     use_autoprompt=True,
                     livecrawl="always",
                 )
@@ -151,17 +164,24 @@ class NewsAnalysisService:
             return None
 
     async def _fetch_malayalam_results(self, query: str):
-        """Async method to fetch Exa search results for Malayalam content"""
+        """Optimized async method to fetch Exa search results for Malayalam content"""
         try:
-            return await asyncio.get_event_loop().run_in_executor(
+            session = await self.get_session()
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
                 self.executor,
                 lambda: self.exa.search_and_contents(
                     query,
-                    text=True,
+                     text = {
+
+                    "max_characters": 1000
+
+                 },
                     num_results=7,
                     type="keyword",
                     use_autoprompt=True,
                     livecrawl="always",
+                  
                 )
             )
         except Exception as e:
@@ -202,16 +222,19 @@ class NewsAnalysisService:
             # Validate required fields and types
             if not isinstance(json_obj.get("ISFAKE"), (int, float)) or \
                not isinstance(json_obj.get("CONFIDENCE"), (int, float)) or \
-               not isinstance(json_obj.get("EXPLANATION"), str):
+               not isinstance(json_obj.get("EXPLANATION_EN"), str) or \
+               not isinstance(json_obj.get("EXPLANATION_ML"), str):
                 raise ValueError("Invalid field types")
 
             # Normalize values
             json_obj["ISFAKE"] = 1 if json_obj["ISFAKE"] not in [0, 1] else json_obj["ISFAKE"]
             json_obj["CONFIDENCE"] = max(0.0, min(1.0, float(json_obj["CONFIDENCE"])))
             
-            # Ensure explanation is not empty
-            if not json_obj["EXPLANATION"].strip():
-                json_obj["EXPLANATION"] = "വിശകലനം പൂർത്തിയായി, പക്ഷേ വിശദീകരണം ലഭ്യമല്ല."
+            # Ensure explanations are not empty
+            if not json_obj["EXPLANATION_EN"].strip():
+                json_obj["EXPLANATION_EN"] = "Analysis completed, but no detailed explanation available."
+            if not json_obj["EXPLANATION_ML"].strip():
+                json_obj["EXPLANATION_ML"] = "വിശകലനം പൂർത്തിയായി, പക്ഷേ വിശദീകരണം ലഭ്യമല്ല."
 
             return json_obj
         except (json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
@@ -219,7 +242,8 @@ class NewsAnalysisService:
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 0.5,
-                "EXPLANATION": "പ്രതികരണം വിശകലനം ചെയ്യുന്നതിൽ പിശക്. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+                "EXPLANATION_EN": "System error: Failed to analyze response. Please try again.",
+                "EXPLANATION_ML": "സിസ്റ്റം പിശക്: പ്രതികരണം വിശകലനം ചെയ്യുന്നതിൽ പരാജയം. ദയവായി വീണ്ടും ശ്രമിക്കുക."
             }
 
     async def analyze_news(self, query: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
@@ -227,11 +251,12 @@ class NewsAnalysisService:
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 1.0,
-                "EXPLANATION": "വിശകലനത്തിനായി കുറഞ്ഞത് 5 അക്ഷരങ്ങളെങ്കിലും ആവശ്യമാണ്."
+                "EXPLANATION_EN": "Analysis requires at least 5 characters.",
+                "EXPLANATION_ML": "വിശകലനത്തിനായി കുറഞ്ഞത് 5 അക്ഷരങ്ങളെങ്കിലും ആവശ്യമാണ്."
             }
 
         # Generate cache key with version for prompt updates
-        prompt_version = "v2"
+        prompt_version = "v3"  # Updated version for bilingual support
         query_hash = hashlib.md5(f"{query}{prompt_version}".encode()).hexdigest()
         
         # Check memory cache first
@@ -255,36 +280,12 @@ class NewsAnalysisService:
                 malayalam_task = self._fetch_malayalam_results(query)
                 results = await asyncio.gather(english_task, malayalam_task, return_exceptions=True)
                 
-                # Process and combine results
-                combined_results = []
-                for result in results:
-                    if isinstance(result, Exception):
-                        logger.warning(f"Search failed: {str(result)}")
-                        continue
-                    if result and hasattr(result, 'results'):
-                        combined_results.extend(result.results)
-                
-                # Remove duplicates and create Results object
-                seen_urls = set()
-                unique_results = []
-                for result in combined_results:
-                    if result.url not in seen_urls:
-                        seen_urls.add(result.url)
-                        unique_results.append(result)
-                
-                class Results:
-                    def __init__(self, results_list):
-                        self.results = results_list
-                    def __len__(self):
-                        return len(self.results)
-
-                results = Results(unique_results[:10])
-                
-                if not results or len(results) == 0:
+                if not any(r for r in results if not isinstance(r, Exception)):
                     error_response = {
                         "ISFAKE": 1,
                         "CONFIDENCE": 0.9,
-                        "EXPLANATION": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
+                        "EXPLANATION_EN": "No reliable information found about this claim.",
+                        "EXPLANATION_ML": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
                     }
                     return error_response
 
@@ -293,12 +294,47 @@ class NewsAnalysisService:
                 return {
                     "ISFAKE": 1,
                     "CONFIDENCE": 0.8,
-                    "EXPLANATION": "തിരയൽ സമയപരിധി കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+                    "EXPLANATION_EN": "Search timeout. Please try again.",
+                    "EXPLANATION_ML": "തിരയൽ സമയപരിധി കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
                 }
+
+            # Process and combine results
+            combined_results = []
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning(f"Search failed: {str(result)}")
+                    continue
+                if result and hasattr(result, 'results'):
+                    combined_results.extend(result.results)
+            
+            # Remove duplicates and create Results object
+            seen_urls = set()
+            unique_results = []
+            for result in combined_results:
+                if result.url not in seen_urls:
+                    seen_urls.add(result.url)
+                    unique_results.append(result)
+            
+            class Results:
+                def __init__(self, results_list):
+                    self.results = results_list
+                def __len__(self):
+                    return len(self.results)
+
+            results = Results(unique_results[:10])
+            
+            if not results or len(results) == 0:
+                error_response = {
+                    "ISFAKE": 1,
+                    "CONFIDENCE": 0.9,
+                    "EXPLANATION_EN": "No reliable information found about this claim.",
+                    "EXPLANATION_ML": "ഈ അവകാശവാദത്തെക്കുറിച്ച് വിശ്വസനീയമായ വിവരങ്ങളൊന്നും കണ്ടെത്താനായില്ല."
+                }
+                return error_response
 
             # Enhanced content processing
             content_docs = []
-            total_sources = len(results) if results else 0
+            total_sources = len(results)
             recent_sources = 0
             credible_sources = 0
 
@@ -311,7 +347,6 @@ class NewsAnalysisService:
                         if result.published_date:
                             try:
                                 published_date = parser.parse(result.published_date)
-                                # Convert naive datetime to timezone-aware
                                 if published_date.tzinfo is None:
                                     published_date = published_date.replace(tzinfo=timezone.utc)
                                 current_time = datetime.now(timezone.utc)
@@ -330,15 +365,17 @@ class NewsAnalysisService:
             
             analysis_context = f"""
             CLAIM METADATA:
-            - Total Sources Found: {total_sources}
+            - Total Sources: {total_sources}
             - Recent Sources (≤7d): {recent_sources}
             - Credible Sources: {credible_sources}
             - Analysis Date: {current_date}
+            - Original Language: {"Malayalam" if detect(query) == "ml" else "English"}
             
             DOCUMENTS TO ANALYZE:
             {chr(10).join(content_docs)}
             
             CLAIM TO VERIFY: {translated_query}
+            ORIGINAL CLAIM: {query}
             """
 
             # Get analysis with enhanced error handling
@@ -351,22 +388,15 @@ class NewsAnalysisService:
                 return {
                     "ISFAKE": 1,
                     "CONFIDENCE": 1.0,
-                    "EXPLANATION": "വിശകലന സമയം കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+                    "EXPLANATION_EN": "Analysis timeout. Please try again.",
+                    "EXPLANATION_ML": "വിശകലന സമയം കഴിഞ്ഞു. ദയവായി വീണ്ടും ശ്രമിക്കുക."
                 }
 
             # Process and validate response
             result = self._clean_json_response(response.text)
             
-            # Validate result structure
-            if not all(k in result for k in ["ISFAKE", "CONFIDENCE", "EXPLANATION"]):
-                result = {
-                    "ISFAKE": 1,
-                    "CONFIDENCE": 1.0,
-                    "EXPLANATION": "സിസ്റ്റം പിശക്: അപൂർണ്ണമായ വിശകലനം. ദയവായി പിന്നീട് ശ്രമിക്കുക."
-                }
-            
-            # Cache valid results
-            if result.get("EXPLANATION") != "സിസ്റ്റം പിശക്: അപൂർണ്ണമായ വിശകലനം. ദയവായി പിന്നീട് ശ്രമിക്കുക.":
+            # Cache only valid results
+            if result.get("EXPLANATION_EN") != "System error: Failed to analyze response. Please try again.":
                 self.memory_cache[query_hash] = result
                 self.disk_cache.set(query_hash, result)
             
@@ -380,7 +410,8 @@ class NewsAnalysisService:
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 1.0,
-                "EXPLANATION": "സിസ്റ്റം പിശക്: വിശകലനം പൂർത്തിയാക്കാൻ കഴിഞ്ഞില്ല. ദയവായി പിന്നീട് ശ്രമിക്കുക."
+                "EXPLANATION_EN": "System error: Analysis failed. Please try again later.",
+                "EXPLANATION_ML": "സിസ്റ്റം പിശക്: വിശകലനം പൂർത്തിയാക്കാൻ കഴിഞ്ഞില്ല. ദയവായി പിന്നീട് ശ്രമിക്കുക."
             }
 
     def _cleanup_caches(self):
@@ -393,7 +424,7 @@ class NewsAnalysisService:
         """Cache the system prompt as it rarely changes"""
         return f"""[ANALYSIS DATE: {current_date}]
 
-You are a highly precise AI fact-checker tasked with detecting misinformation. Your analysis must be extremely thorough and conservative - when in doubt, mark as unverified. Return result in strict JSON format. Analyze each claim atomically, breaking down compound statements.
+You are a highly precise AI fact-checker tasked with detecting misinformation. Your analysis must be extremely thorough and conservative - when in doubt, mark as unverified. Return result in strict JSON format with both English and Malayalam explanations. Analyze each claim atomically, breaking down compound statements.
 
 CORE PRINCIPLES:
 1. Default to Uncertainty: If insufficient evidence exists, mark as potentially false
@@ -474,7 +505,7 @@ VERIFICATION PROTOCOL:
    - Assess probability of claims
 
 Output Format (Strict JSON, no newlines/spaces):
-{{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION":"വിശദമായ വിശകലനം"}}
+{{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION_EN":"Detailed analysis in English","EXPLANATION_ML":"വിശദമായ വിശകലനം"}}
 
 RESPONSE RULES:
 1. ISFAKE: [0: Verified True, 1: False/Unverified]
@@ -487,14 +518,23 @@ RESPONSE RULES:
    - Account for verification depth
    - Never exceed source limitations
 
-3. EXPLANATION:
-   - Malayalam language only
+3. EXPLANATION_EN (English):
+   - Clear and concise English
    - Maximum 200 words
    - Include evidence summary
    - State verification method
    - List key sources
    - Note any uncertainties
    - Professional tone
+
+4. EXPLANATION_ML (Malayalam):
+   - Natural Malayalam language
+   - Maximum 200 words
+   - Match English content
+   - Use formal register
+   - Maintain cultural context
+   - Professional tone
+   - Include same key points as English
 
 MANDATORY CHECKS:
 ✓ Temporal consistency
@@ -505,6 +545,8 @@ MANDATORY CHECKS:
 ✓ Entity verification
 ✓ Claim atomicity
 ✓ Impact assessment
+✓ Translation accuracy
+✓ Cultural context preservation
 
 If ANY mandatory check fails, mark as ISFAKE:1"""
 

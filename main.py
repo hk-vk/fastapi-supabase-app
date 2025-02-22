@@ -1,41 +1,62 @@
+import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import ORJSONResponse
 from supabase import create_client, Client
 from app.schemas import AnalysisRequestCreate, AnalysisRequestResponse, FeedbackCreate
 from app.routers import feedback
 from app.services.news_analysis import NewsAnalysisService
-from app.services.writing_style import malayalam_analyzer as writing_style_analyzer
+from app.services import get_analyzer
 from typing import Optional, Dict, Any
 from datetime import datetime
-import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 import logging
+from app.core.http_client import get_http_session, cleanup_http_session
+
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv(override=True)
 
-# Initialize FastAPI app
-app = FastAPI()
+# Application lifecycle management
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize services and create HTTP session
+    app.state.http_session = await get_http_session()
+    app.state.news_service = NewsAnalysisService()
+    app.state.writing_style_analyzer = get_analyzer()
+    
+    yield
+    
+    # Shutdown: Cleanup resources
+    await cleanup_http_session()
+    if hasattr(app.state, 'news_service'):
+        await app.state.news_service.cleanup()
 
-# Initialize NewsAnalysisService
-news_service = NewsAnalysisService()
+# Initialize FastAPI app with ORJSON response and lifecycle management
+app = FastAPI(
+    lifespan=lifespan,
+    default_response_class=ORJSONResponse,
+    title="YEAH News Detection API",
+    description="API for analyzing news articles with persistent connections"
+)
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in development
-    allow_credentials=False,  # Set to False since we're using * for origins
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=86400,  # Cache preflight requests for 24 hours
+    max_age=86400
 )
 
 # Include routers
-app.include_router(feedback.router)
+app.include_router(feedback.router, prefix="/api")
 
 # Initialize Supabase client with debug logging
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -46,7 +67,6 @@ logger.debug(f"SUPABASE_KEY: {'set' if SUPABASE_KEY else 'not set'}")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     # Try loading directly from .env file as fallback
-    from dotenv import dotenv_values
     config = dotenv_values(".env")
     SUPABASE_URL = config.get("SUPABASE_URL")
     SUPABASE_KEY = config.get("SUPABASE_KEY")
@@ -93,7 +113,7 @@ async def create_feedback(feedback: FeedbackCreate):
 @app.post("/api/reverse-searchy")
 async def reverse_search(query: Dict[str, Any], background_tasks: BackgroundTasks):
     try:
-        result = await news_service.analyze_news(query.get("content", ""), background_tasks)
+        result = await app.state.news_service.analyze_news(query.get("content", ""), background_tasks)
         return result
     except Exception as e:
         logger.error(f"Error in reverse search: {str(e)}")
@@ -107,7 +127,7 @@ async def analyze_writing_style(query: Dict[str, str]):
             raise HTTPException(status_code=400, detail="Content is required")
         
         logger.debug(f"Analyzing text of length: {len(content)}")
-        result = writing_style_analyzer.analyze_text(content)
+        result = app.state.writing_style_analyzer.analyze_text(content)
         
         logger.debug(f"Analysis results: {result}")
         if all(score == 0 for score in result.values()):

@@ -1,16 +1,30 @@
 import re
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 from functools import lru_cache
 import logging
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+# Global singleton instance
+_ANALYZER_INSTANCE: Optional['EnhancedMalayalamAnalyzer'] = None
+
+def get_analyzer() -> 'EnhancedMalayalamAnalyzer':
+    """Get or create the analyzer instance (singleton pattern)"""
+    global _ANALYZER_INSTANCE
+    if _ANALYZER_INSTANCE is None:
+        _ANALYZER_INSTANCE = EnhancedMalayalamAnalyzer()
+        logger.info("Created new EnhancedMalayalamAnalyzer instance")
+    return _ANALYZER_INSTANCE
+
 class EnhancedMalayalamAnalyzer:
     def __init__(self):
-        self._compile_patterns()
-        self.sentence_split_re = re.compile(r'[।॥?!.]|\s+\-\s+')
+        if not hasattr(self, '_initialized'):
+            self._compile_patterns()
+            self.sentence_split_re = re.compile(r'[।॥?!.]|\s+\-\\s+')
+            self._initialized = True
+            logger.info("Initialized EnhancedMalayalamAnalyzer patterns")
 
     def _compile_patterns(self) -> None:
         """Enhanced regex patterns for Malayalam clickbait detection"""
@@ -174,5 +188,7 @@ class EnhancedMalayalamAnalyzer:
             'clickbait': self._normalize_score(clickbait_score)
         }
 
-# Initialize analyzer
-malayalam_analyzer = EnhancedMalayalamAnalyzer()
+# Initialize singleton instance at module load time
+_ANALYZER_INSTANCE = get_analyzer()
+
+__all__ = ['get_analyzer']
