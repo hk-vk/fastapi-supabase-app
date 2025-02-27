@@ -150,9 +150,9 @@ class NewsAnalysisService:
                     query,
                      text = {
 
-                    "max_characters": 1000
+                    "max_characters": 2000
 
-                 },
+                 }, 
                     num_results=8,
                     type="keyword",
                     use_autoprompt=True,
@@ -174,7 +174,7 @@ class NewsAnalysisService:
                     query,
                      text = {
 
-                    "max_characters": 1000
+                    "max_characters": 2000
 
                  },
                     num_results=7,

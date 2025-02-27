@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
 import logging
 from typing import Optional
@@ -29,6 +30,19 @@ router = APIRouter(
     tags=["feedback"]
 )
 
+@router.options("/submit")
+@router.head("/submit")
+async def feedback_preflight():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS, HEAD",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "3600",
+        }
+    )
+
 @router.post("/submit")
 async def submit_feedback(feedback_data: FeedbackRequest):
     try:
@@ -53,11 +67,18 @@ async def submit_feedback(feedback_data: FeedbackRequest):
             logger.error(f"Supabase error: {response}")
             raise HTTPException(status_code=400, detail="Failed to insert feedback")
 
-        return {
-            "status": "success",
-            "message": "Feedback submitted successfully",
-            "data": response.data[0]
-        }
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": "Feedback submitted successfully",
+                "data": response.data[0]
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS, HEAD",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error submitting feedback: {str(e)}")
