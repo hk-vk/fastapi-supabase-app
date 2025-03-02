@@ -18,7 +18,7 @@ python-multipart==0.0.6
 
 # Additional dependencies
 gunicorn==21.2.0
-httpx==0.25.2
+httpx>=0.23.0,<0.24.0
 pytest==7.4.3
 psycopg2-binary==2.9.9
 alembic==1.12.1
