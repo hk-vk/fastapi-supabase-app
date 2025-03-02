@@ -21,10 +21,13 @@ fastapi-supabase-app
 │       ├── __init__.py  # Initializes the core module
 │       └── config.py    # Configuration settings for the application
 ├── requirements.txt      # Project dependencies
+├── render.yaml          # Render deployment configuration
+├── Procfile             # Process file for web servers
+├── runtime.txt          # Python runtime specification
 └── README.md             # Project documentation
 ```
 
-## Setup Instructions
+## Local Setup Instructions
 
 1. Clone the repository:
    ```
@@ -40,21 +43,63 @@ fastapi-supabase-app
 
 3. Install the required dependencies:
    ```
-   pip install -r requirements.txt
+   pnpm install
    ```
 
-4. Configure your Supabase credentials in `app/core/config.py`.
+4. Create a `.env` file based on the `.env.example` template:
+   ```
+   cp .env.example .env
+   ```
 
-5. Run the application:
+5. Configure your Supabase credentials in the `.env` file.
+
+6. Run the application:
    ```
-   uvicorn app.main:app --reload
+   uvicorn main:app --reload
    ```
+
+## Deployment to Render
+
+This project includes configuration files for deploying to Render.
+
+### Prerequisites
+
+1. Create a Render account at [render.com](https://render.com/)
+2. Link your GitHub repository to Render
+
+### Deployment Steps
+
+1. From your Render dashboard, click on "New" and select "Blueprint" (or "Web Service" if not using the render.yaml blueprint)
+
+2. If using Blueprint:
+   - Connect your GitHub repository
+   - Render will automatically detect the `render.yaml` file and configure the services
+
+3. If using Web Service manually:
+   - Select your GitHub repository
+   - Use the following settings:
+     - **Name**: `fastapi-supabase-app` (or your preferred name)
+     - **Environment**: `Python`
+     - **Build Command**: `pip install -r requirements.txt`
+     - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+4. Configure environment variables in the Render dashboard:
+   - Add all variables from your `.env` file, especially:
+     - `SUPABASE_URL`
+     - `SUPABASE_KEY`
+     - `SUPABASE_SERVICE_KEY`
+
+5. Click "Create Web Service"
+
+### Updating Deployed Application
+
+Render automatically deploys new versions when you push to your connected repository branch.
 
 ## Usage Guidelines
 
-- Access the API documentation at `http://localhost:8000/docs` after running the application.
-- Use the authentication routes for user registration and login as defined in `app/auth/routes.py`.
+- Access the API documentation at `http://localhost:8000/docs` for local development or at your Render URL for the deployed version
+- Use the authentication routes for user registration and login as defined in `app/auth/routes.py`
 
 ## License
 
-This project is licensed under the MIT License.# yeah-backend
+This project is licensed under the MIT License.

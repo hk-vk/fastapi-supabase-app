@@ -90,6 +90,19 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Health check endpoint for Render
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring and deployment platforms
+    Returns a simple status message and timestamp
+    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
 # Add OPTIONS and HEAD method handlers for root endpoint
 @app.options("/")
 @app.head("/")
