@@ -271,9 +271,10 @@ class EnhancedMalayalamAnalyzer:
                     'writingStyle': 0.0,
                     'clickbait': 0.0
                 }
-                
-            if len(text.strip()) < 10:
-                logger.debug("Text too short for analysis")
+            
+            # Process even short text
+            if not text.strip():
+                logger.debug("Empty text provided for analysis")
                 return {
                     'sensationalism': 0.0,
                     'writingStyle': 0.0,

@@ -247,12 +247,12 @@ class NewsAnalysisService:
             }
 
     async def analyze_news(self, query: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-        if not query or len(query.strip()) < 5:
+        if not query or len(query.strip()) == 0:
             return {
                 "ISFAKE": 1,
                 "CONFIDENCE": 1.0,
-                "EXPLANATION_EN": "Analysis requires at least 5 characters.",
-                "EXPLANATION_ML": "വിശകലനത്തിനായി കുറഞ്ഞത് 5 അക്ഷരങ്ങളെങ്കിലും ആവശ്യമാണ്."
+                "EXPLANATION_EN": "Please provide some content for analysis.",
+                "EXPLANATION_ML": "വിശകലനത്തിനായി ഉള്ളടക്കം നൽകുക."
             }
 
         # Generate cache key with version for prompt updates
