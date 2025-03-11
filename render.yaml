@@ -3,15 +3,20 @@ services:
     name: fastapi-supabase-app
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.0
+        value: 3.11
       - key: PORT
-        value: 8000
+        value: 10000
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
         sync: false
       - key: SUPABASE_SERVICE_KEY
-        sync: false 
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
+    ports:
+      - port: 10000
+        protocol: TCP 
