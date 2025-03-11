@@ -327,3 +327,4 @@ if __name__ == "__main__":
         log_level="info",
         proxy_headers=True
     )
+# The app object is imported by api/index.py for Vercel deployment
