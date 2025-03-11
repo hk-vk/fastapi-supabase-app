@@ -310,14 +310,17 @@ if __name__ == "__main__":
     print("Starting server with CORS enabled...")
     print("Allowed origins: *")
     print("Allowed methods: GET, POST, PUT, DELETE, OPTIONS, HEAD")
-    print("API endpoint: http://localhost:8000/api/reverse-searchy")
+    
+    port = int(os.environ.get("PORT", 10000))
+    print(f"API endpoint: http://0.0.0.0:{port}")
     print("==============================\n")
     
     import uvicorn
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 
-        port=8000, 
+        port=port,
         reload=True,
-        log_level="debug"
+        log_level="info",
+        proxy_headers=True
     )
