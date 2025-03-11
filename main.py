@@ -44,13 +44,17 @@ app = FastAPI(
     description="API for analyzing news articles with persistent connections"
 )
 
+# Get port from environment variable
+port = int(os.environ.get("PORT", 10000))
+host = "0.0.0.0"
+
 # Configure CORS with more specific settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "chrome-extension://*",  # Allow Chrome extension
-        "http://localhost:8000",  # Local API
-        "http://127.0.0.1:8000",  # Local API alternative
+        f"http://{host}:{port}",  # API server
+        "https://*.onrender.com",  # Render domains
         "*"  # Fallback for development
     ],
     allow_credentials=True,
@@ -311,14 +315,13 @@ if __name__ == "__main__":
     print("Allowed origins: *")
     print("Allowed methods: GET, POST, PUT, DELETE, OPTIONS, HEAD")
     
-    port = int(os.environ.get("PORT", 10000))
-    print(f"API endpoint: http://0.0.0.0:{port}")
+    print(f"API endpoint: http://{host}:{port}")
     print("==============================\n")
     
     import uvicorn
     uvicorn.run(
         "main:app", 
-        host="0.0.0.0", 
+        host=host, 
         port=port,
         reload=True,
         log_level="info",
