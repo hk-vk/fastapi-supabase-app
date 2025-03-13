@@ -13,6 +13,8 @@ from datetime import datetime
 from dotenv import load_dotenv, dotenv_values
 import logging
 from app.core.http_client import get_http_session, cleanup_http_session
+from pydantic import BaseModel
+from app.services.url_analysis import URLAnalysisService, URLAnalysisResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +30,9 @@ async def lifespan(app: FastAPI):
     app.state.http_session = await get_http_session()
     app.state.news_service = NewsAnalysisService()
     app.state.writing_style_analyzer = get_analyzer()
+    
+    # Initialize URL Analysis Service
+    app.state.url_analysis_service = URLAnalysisService()
     
     yield
     
@@ -308,6 +313,26 @@ async def general_exception_handler(request, exc):
             "Access-Control-Allow-Headers": "Content-Type, Accept, Origin",
         }
     )
+
+class URLAnalysisRequest(BaseModel):
+    url: str
+
+@app.post("/api/analyze-url", response_model=URLAnalysisResponse)
+async def analyze_url(request: URLAnalysisRequest):
+    """
+    Analyze a URL for trustworthiness and potential threats.
+    
+    Parameters:
+    - url: The URL to analyze
+    
+    Returns:
+    - URLAnalysisResponse containing the analysis results
+    """
+    try:
+        return await app.state.url_analysis_service.analyze_url(request.url)
+    except Exception as e:
+        logging.error(f"Error analyzing URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     print("\n=== YEAH News Detection API ===")

@@ -103,7 +103,10 @@ class NewsAnalysisService:
         self.exa = Exa(exa_api_key)
         
         # Initialize Gemini
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        if not google_api_key:
+            raise ValueError("GOOGLE_API_KEY not found in environment variables")
+        genai.configure(api_key=google_api_key)
         self.model = genai.GenerativeModel('gemini-2.0-flash')
         
         # Initialize translator with persistent connection
@@ -433,6 +436,8 @@ CORE PRINCIPLES:
 4. Source Hierarchy: Weight information based on authority and recency
 5. Context Preservation: Consider full context before making determinations
 6. Cross-Validation: Require multiple independent sources for verification
+7. Local News Sensitivity: Special consideration for local/village news
+8. Short Text Adaptation: Modified verification for concise content
 
 VERIFICATION PROTOCOL:
 
@@ -442,6 +447,8 @@ VERIFICATION PROTOCOL:
    - Map entity relationships and hierarchies
    - Extract quantifiable metrics and dates
    - Isolate conditional statements and qualifiers
+   - For short texts: Focus on key claims and essential context
+   - For local news: Consider community impact and local relevance
 
 2. TEMPORAL ANALYSIS (Mandatory):
    | Time Frame | Required Evidence |
@@ -451,6 +458,8 @@ VERIFICATION PROTOCOL:
    | Present    | Live sources + Official statements + Independent verification |
    | Future     | Official announcements + Supporting documentation |
    | Undated    | Full context reconstruction + Multiple source validation |
+   | Local News | Local authority + Community verification + Local media |
+   | Short Text | Focus on immediate context + Key source verification |
 
 3. SOURCE CREDIBILITY MATRIX:
    | Source Type | Weight | Required Validation |
@@ -464,6 +473,9 @@ VERIFICATION PROTOCOL:
    | Expert Statements | 0.50 | Credential verification + Conflict check |
    | Social Media | 0.20 | Extensive corroboration required |
    | Anonymous | 0.10 | Multiple independent verifications |
+   | Local Village News | 0.70 | Community verification + Local authority |
+   | Small City Media | 0.65 | Local cross-reference + Community feedback |
+   | Short Text Sources | 0.40 | Context verification + Source credibility |
 
 4. VALIDATION REQUIREMENTS:
    A. For Any Positive Verification:
@@ -473,7 +485,22 @@ VERIFICATION PROTOCOL:
       - Clear temporal alignment
       - Proper contextual fit
 
-   B. Automatic False Flags:
+   B. For Local News Verification:
+      - At least 1 local authority source
+      - Community verification (if available)
+      - Local media coverage
+      - Community impact assessment
+      - Local context consideration
+      - Reduced source requirement (2 sources acceptable)
+
+   C. For Short Text Verification:
+      - Focus on key claims
+      - Essential context verification
+      - Source credibility check
+      - Logical consistency
+      - Reduced source requirement (1-2 sources acceptable)
+
+   D. Automatic False Flags:
       - Single source claims
       - Contradictory evidence
       - Temporal inconsistencies
@@ -487,6 +514,8 @@ VERIFICATION PROTOCOL:
    - Corroboration (Multiple: 1.0, Single: 0.5, None: 0.0)
    - Authority (Official: 1.0, Expert: 0.8, Public: 0.4)
    - Completeness (Full: 1.0, Partial: 0.6, Limited: 0.3)
+   - Local Relevance (High: 1.0, Medium: 0.7, Low: 0.3)
+   - Community Impact (High: 1.0, Medium: 0.7, Low: 0.3)
 
 6. CONTEXTUAL ANALYSIS:
    - Historical precedent check
@@ -495,6 +524,10 @@ VERIFICATION PROTOCOL:
    - Domain-specific validation
    - Stakeholder analysis
    - Impact assessment
+   - Local community context
+   - Village/city specific factors
+   - Community sentiment
+   - Local traditions and customs
 
 7. ERROR PREVENTION:
    - Double-check all dates and numbers
@@ -503,6 +536,33 @@ VERIFICATION PROTOCOL:
    - Validate cause-effect relationships
    - Check for logical consistency
    - Assess probability of claims
+   - Consider local variations
+   - Account for cultural differences
+   - Respect local sensitivities
+
+8. LOCAL NEWS SPECIAL CONSIDERATIONS:
+   - Village-level news verification
+   - Small city media reliability
+   - Community-based sources
+   - Local authority statements
+   - Cultural context preservation
+   - Traditional knowledge integration
+   - Community impact assessment
+   - Local language sources
+   - Regional variations
+   - Community feedback
+
+9. SHORT TEXT HANDLING:
+   - Focus on essential claims
+   - Context preservation
+   - Source credibility
+   - Logical coherence
+   - Key information extraction
+   - Missing context assessment
+   - Implicit information handling
+   - Core message verification
+   - Essential details check
+   - Quick verification protocol
 
 Output Format (Strict JSON, no newlines/spaces):
 {{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION_EN":"Detailed analysis in English","EXPLANATION_ML":"വിശദമായ വിശകലനം"}}
@@ -511,12 +571,17 @@ RESPONSE RULES:
 1. ISFAKE: [0: Verified True, 1: False/Unverified]
    - Default to 1 if any doubt exists
    - Require 100% certainty for 0
+   - Special consideration for local news
+   - Modified threshold for short texts
 
 2. CONFIDENCE: [0.0-1.0]
    - Must reflect evidence quality
    - Consider source credibility
    - Account for verification depth
    - Never exceed source limitations
+   - Local context weighting
+   - Community impact factor
+   - Short text adaptation
 
 3. EXPLANATION_EN (English):
    - Clear and concise English
@@ -526,6 +591,8 @@ RESPONSE RULES:
    - List key sources
    - Note any uncertainties
    - Professional tone
+   - Local context inclusion
+   - Community impact mention
 
 4. EXPLANATION_ML (Malayalam):
    - Natural Malayalam language
@@ -535,6 +602,8 @@ RESPONSE RULES:
    - Maintain cultural context
    - Professional tone
    - Include same key points as English
+   - Local language adaptation
+   - Cultural sensitivity
 
 MANDATORY CHECKS:
 ✓ Temporal consistency
@@ -547,6 +616,11 @@ MANDATORY CHECKS:
 ✓ Impact assessment
 ✓ Translation accuracy
 ✓ Cultural context preservation
+✓ Local relevance
+✓ Community impact
+✓ Short text adaptation
+✓ Village/city context
+✓ Cultural sensitivity
 
 If ANY mandatory check fails, mark as ISFAKE:1"""
 

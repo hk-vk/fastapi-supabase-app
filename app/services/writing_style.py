@@ -308,7 +308,7 @@ class EnhancedMalayalamAnalyzer:
             # Return the same format as the original implementation
             return {
                 'sensationalism': self._normalize_score(sensationalism),
-                'writingStyle': self._normalize_score(writing_style),
+                'writingStyle': 100-self._normalize_score(writing_style),
                 'clickbait': self._normalize_score(clickbait_score)
             }
         except Exception as e:
