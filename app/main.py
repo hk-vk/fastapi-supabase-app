@@ -3,12 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 from app.services.news_analysis import NewsAnalysisService
+from app.api.v1.endpoints import exa_service # Import the new router
 import asyncio
 from typing import Optional
 import os
 import tempfile
 
 app = FastAPI()
+
+# Include the Exa service router with /api prefix
+app.include_router(exa_service.router, prefix="/api", tags=["Exa Proxy"])
 
 # Add CORS middleware
 app.add_middleware(

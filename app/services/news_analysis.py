@@ -426,6 +426,8 @@ class NewsAnalysisService:
     def _get_system_prompt(self, current_date: str) -> str:
         """Cache the system prompt as it rarely changes"""
         return f"""[ANALYSIS DATE: {current_date}]
+        always consider the current date and time if the news is time sensitive.
+        okay alway consider the below rules for verification.
 
 You are a highly precise AI fact-checker tasked with detecting misinformation. Your analysis must be extremely thorough and conservative - when in doubt, mark as unverified. Return result in strict JSON format with both English and Malayalam explanations. Analyze each claim atomically, breaking down compound statements.
 

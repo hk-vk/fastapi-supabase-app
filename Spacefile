@@ -1,0 +1,19 @@
+# Spacefile Docs: https://deta.space/docs/en/basics/spacefile
+v: 0
+micros:
+  - name: fastapi-supabase-app # Choose a name for your micro service
+    src: . # Root directory of your source code
+    engine: python3.9 # Specify Python version (e.g., python3.9, python3.10)
+    primary: true # Mark this as the primary micro to be served
+    commands:
+      - pip install -r requirements.txt # Install dependencies
+    # The command Deta runs to start your app
+    # It will automatically set the PORT environment variable
+    run: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Optional: Environment variables (use @env decorator in code for secrets)
+    # env:
+    #   MY_VAR: "my_value"
+    # include: # Files/directories to include in the deployment bundle
+    #   - "app/"
+    #   - "main.py"
+    #   - "requirements.txt" 

@@ -8,6 +8,7 @@ from app.schemas import AnalysisRequestCreate, AnalysisRequestResponse, Feedback
 from app.routers import feedback
 from app.services.news_analysis import NewsAnalysisService
 from app.services import get_analyzer
+from app.api.v1.endpoints import exa_service
 from typing import Optional, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv, dotenv_values
@@ -79,7 +80,8 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(feedback.router, prefix="/api")
+app.include_router(feedback.router)
+app.include_router(exa_service.router, prefix="/api")
 
 # Initialize Supabase client with debug logging
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
