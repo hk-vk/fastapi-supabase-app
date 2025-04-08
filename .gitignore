@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+.env
 env/
 venv/
 ENV/
@@ -41,3 +42,4 @@ Thumbs.db
 
 # dotenv
 .env
+.env.local

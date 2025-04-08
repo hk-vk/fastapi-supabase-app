@@ -8,7 +8,7 @@ from app.schemas import AnalysisRequestCreate, AnalysisRequestResponse, Feedback
 from app.routers import feedback
 from app.services.news_analysis import NewsAnalysisService
 from app.services import get_analyzer
-from app.api.v1.endpoints import exa_service
+from app.api.v1.endpoints import exa_service, image_analysis
 from typing import Optional, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv, dotenv_values
@@ -16,6 +16,7 @@ import logging
 from app.core.http_client import get_http_session, cleanup_http_session
 from pydantic import BaseModel
 from app.services.url_analysis import URLAnalysisService, URLAnalysisResponse
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -82,6 +83,7 @@ app.add_middleware(
 # Include routers
 app.include_router(feedback.router)
 app.include_router(exa_service.router, prefix="/api")
+app.include_router(image_analysis.router, prefix="/api/v1/image-analysis")
 
 # Initialize Supabase client with debug logging
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -335,6 +337,28 @@ async def analyze_url(request: URLAnalysisRequest):
     except Exception as e:
         logging.error(f"Error analyzing URL: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Configure timeout settings
+@app.middleware("http")
+async def timeout_middleware(request, call_next):
+    try:
+        return await asyncio.wait_for(call_next(request), timeout=120)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Request timeout"}
+        )
+
+@app.on_event("startup")
+async def startup_event():
+    # Initialize persistent sessions on startup
+    await app.state.news_service.get_session()
+    await app.state.news_service.get_translate_session()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Cleanup sessions on shutdown
+    await app.state.news_service.cleanup()
 
 if __name__ == "__main__":
     print("\n=== YEAH News Detection API ===")

@@ -440,6 +440,8 @@ CORE PRINCIPLES:
 6. Cross-Validation: Require multiple independent sources for verification
 7. Local News Sensitivity: Special consideration for local/village news
 8. Short Text Adaptation: Modified verification for concise content
+9. Student Organization Verification: Special rules for student clubs and organizations
+10. Faculty Verification: Special rules for faculty and HOD verification
 
 VERIFICATION PROTOCOL:
 
@@ -451,6 +453,8 @@ VERIFICATION PROTOCOL:
    - Isolate conditional statements and qualifiers
    - For short texts: Focus on key claims and essential context
    - For local news: Consider community impact and local relevance
+   - For student organizations: Verify membership and official status
+   - For faculty claims: Verify position and department hierarchy
 
 2. TEMPORAL ANALYSIS (Mandatory):
    | Time Frame | Required Evidence |
@@ -462,6 +466,8 @@ VERIFICATION PROTOCOL:
    | Undated    | Full context reconstruction + Multiple source validation |
    | Local News | Local authority + Community verification + Local media |
    | Short Text | Focus on immediate context + Key source verification |
+   | Student Org| Membership verification + Club registration + Current status |
+   | Faculty    | Department records + Official listings + Position verification |
 
 3. SOURCE CREDIBILITY MATRIX:
    | Source Type | Weight | Required Validation |
@@ -478,6 +484,9 @@ VERIFICATION PROTOCOL:
    | Local Village News | 0.70 | Community verification + Local authority |
    | Small City Media | 0.65 | Local cross-reference + Community feedback |
    | Short Text Sources | 0.40 | Context verification + Source credibility |
+   | Student Organization | 0.75 | Official registration + Current membership |
+   | Faculty Directory | 0.85 | Official college listing + Department verification |
+   | HOD Position | 0.90 | Department hierarchy + Official appointment |
 
 4. VALIDATION REQUIREMENTS:
    A. For Any Positive Verification:
@@ -502,7 +511,32 @@ VERIFICATION PROTOCOL:
       - Logical consistency
       - Reduced source requirement (1-2 sources acceptable)
 
-   D. Automatic False Flags:
+   D. For Student Organization Verification:
+      - Official club registration
+      - Current membership status
+      - IEEE/other organization membership
+      - College student status verification
+      - Club leadership verification
+      - Event organization records
+      - Reduced source requirement (1-2 sources acceptable)
+
+   E. For Faculty Verification:
+      - Official faculty listing
+      - Department affiliation
+      - Position verification
+      - HOD status (if applicable)
+      - Department hierarchy check
+      - Teaching/research area verification
+      - Reduced source requirement (1-2 sources acceptable)
+
+   F. For HOD Verification:
+      - Department hierarchy verification
+      - Official appointment records
+      - Position in faculty listing 1 indicates hod
+      - Department leadership role
+      - Single source acceptable if from official college website
+
+   G. Automatic False Flags:
       - Single source claims
       - Contradictory evidence
       - Temporal inconsistencies
@@ -518,6 +552,8 @@ VERIFICATION PROTOCOL:
    - Completeness (Full: 1.0, Partial: 0.6, Limited: 0.3)
    - Local Relevance (High: 1.0, Medium: 0.7, Low: 0.3)
    - Community Impact (High: 1.0, Medium: 0.7, Low: 0.3)
+   - Student Org Status (Active: 1.0, Inactive: 0.5, Unverified: 0.0)
+   - Faculty Position (HOD: 1.0, Professor: 0.9, Other: 0.7)
 
 6. CONTEXTUAL ANALYSIS:
    - Historical precedent check
@@ -530,6 +566,9 @@ VERIFICATION PROTOCOL:
    - Village/city specific factors
    - Community sentiment
    - Local traditions and customs
+   - Student organization context
+   - Faculty department context
+   - College hierarchy context
 
 7. ERROR PREVENTION:
    - Double-check all dates and numbers
@@ -541,6 +580,9 @@ VERIFICATION PROTOCOL:
    - Consider local variations
    - Account for cultural differences
    - Respect local sensitivities
+   - Verify student status
+   - Confirm faculty positions
+   - Check department hierarchy
 
 8. LOCAL NEWS SPECIAL CONSIDERATIONS:
    - Village-level news verification
@@ -566,6 +608,27 @@ VERIFICATION PROTOCOL:
    - Essential details check
    - Quick verification protocol
 
+10. STUDENT ORGANIZATION VERIFICATION:
+    - IEEE membership implies college student status
+    - Club registration implies official status
+    - Event organization implies active status
+    - Leadership position implies verified member
+    - College email implies student status
+    - Department affiliation implies faculty status
+    - Faculty listing position implies HOD status
+    - Department hierarchy implies leadership role
+
+11. COLLEGE STUDENT VERIFICATION:
+    - Student ID card/registration implies current enrollment
+    - Course enrollment records imply active student status
+    - Department registration implies student status
+    - Club membership implies student status
+    - Event participation implies student status
+    - Library access implies student status
+    - Campus facility access implies student status
+    - Reduced source requirement (1-2 sources acceptable)
+    - Single source acceptable if from official college system
+
 Output Format (Strict JSON, no newlines/spaces):
 {{"ISFAKE":1,"CONFIDENCE":0.9,"EXPLANATION_EN":"Detailed analysis in English","EXPLANATION_ML":"വിശദമായ വിശകലനം"}}
 
@@ -575,6 +638,8 @@ RESPONSE RULES:
    - Require 100% certainty for 0
    - Special consideration for local news
    - Modified threshold for short texts
+   - Special rules for student organizations
+   - Special rules for faculty verification
 
 2. CONFIDENCE: [0.0-1.0]
    - Must reflect evidence quality
@@ -584,6 +649,8 @@ RESPONSE RULES:
    - Local context weighting
    - Community impact factor
    - Short text adaptation
+   - Student org status factor
+   - Faculty position factor
 
 3. EXPLANATION_EN (English):
    - Clear and concise English
@@ -595,6 +662,8 @@ RESPONSE RULES:
    - Professional tone
    - Local context inclusion
    - Community impact mention
+   - Student org context
+   - Faculty position context
 
 4. EXPLANATION_ML (Malayalam):
    - Natural Malayalam language
@@ -623,6 +692,10 @@ MANDATORY CHECKS:
 ✓ Short text adaptation
 ✓ Village/city context
 ✓ Cultural sensitivity
+✓ Student organization status
+✓ Faculty position verification
+✓ Department hierarchy check
+✓ HOD status verification
 
 If ANY mandatory check fails, mark as ISFAKE:1"""
 
