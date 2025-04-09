@@ -184,6 +184,27 @@ class URLAnalysisService:
     async def analyze_url(self, url: str) -> URLAnalysisResponse:
         logger.info(f"Analyzing URL: {url}")
         
+        # Check for specifically blocked domain
+        try:
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc.lower()
+            if domain == "vyajam-news.pages.dev":
+                logger.warning(f"Blocking URL from explicitly untrusted domain: {url}")
+                return URLAnalysisResponse(
+                    url=url,
+                    prediction="Fake",
+                    prediction_probabilities=[0.0, 1.0], # Assign high probability to fake
+                    google_safe_browsing_flag=False, # Not checked, but flagged
+                    trusted=False,
+                    trust_score=0.0,
+                    is_trustworthy=False,
+                    trust_reasons=["Domain explicitly marked as untrusted."],
+                    final_decision="URL is Untrustworthy (domain blocked)"
+                )
+        except Exception as e:
+            logger.error(f"Error during domain parsing for blocklist check: {e}")
+            # Continue analysis if parsing fails, but log the error
+
         feature_vector = self.extract_features(url)
         if feature_vector is None:
             raise ValueError("Feature extraction failed.")
