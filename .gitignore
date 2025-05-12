@@ -43,3 +43,9 @@ Thumbs.db
 # dotenv
 .env
 .env.local
+
+# Custom ignores
+*.db
+*.log
+*.pdf
+url_test.html
